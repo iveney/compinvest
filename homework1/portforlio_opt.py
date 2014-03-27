@@ -25,11 +25,7 @@ class Simulator:
     # Keys to be read from the data, it is good to read everything in one go.
     self.ls_keys = ['open', 'high', 'low', 'close', 'volume', 'actual_close']
 
-  def simulate(self, startdate, enddate, ls_symbols, allocations):
-    '''
-    Simulate and access the performance of a portfolio
-    @return: volalitility, daily_ret, sharp, cum_ret
-    '''
+  def get_data(self, startdate, enddate, ls_symbols):
     # We need closing prices so the timestamp should be hours=16.
     dt_timeofday = dt.timedelta(hours=16)
 
@@ -39,19 +35,85 @@ class Simulator:
     # Reading the data, now d_data is a dictionary with the keys above.
     # Timestamps and symbols are the ones that were specified before.
     ldf_data = self.c_dataobj.get_data(ldt_timestamps, ls_symbols, self.ls_keys)
-    self.d_data = dict(zip(self.ls_keys, ldf_data))
+    d_data = dict(zip(self.ls_keys, ldf_data))
 
     # Filling the data for NAN
     for s_key in self.ls_keys:
-        self.d_data[s_key] = self.d_data[s_key].fillna(method='ffill')
-        self.d_data[s_key] = self.d_data[s_key].fillna(method='bfill')
-        self.d_data[s_key] = self.d_data[s_key].fillna(1.0)
+        d_data[s_key] = d_data[s_key].fillna(method='ffill')
+        d_data[s_key] = d_data[s_key].fillna(method='bfill')
+        d_data[s_key] = d_data[s_key].fillna(1.0)
 
+    return d_data
+
+  def do_optimize(self, d_data, allocations = 'uniform', step = 0.1,
+                        maxIter = 100, EPSILON = 1e-7):
+    # randomly initialize portfolio
+    na_price = d_data['close'].values
+    nstocks = na_price.shape[1]
+
+    if not allocations or allocations == 'uniform':
+      allocations = np.ones(nstocks) / nstocks
+    elif allocations == 'random':
+      allocations = np.random.random(nstocks)
+      allocations = allocations / np.mean(allocations)
+
+    def search_direction(allocations):
+      # simple strategy: explore each possible direction
+      best_sharpe = 0.0
+      best_allocations = allocations
+      pair = (-1, -1)
+      idx = range(nstocks)
+      for i in idx:
+        for j in idx:
+          if i == j:
+            continue
+
+          delta = np.ones(nstocks)
+          new = list(allocations)
+          new[i] += 0.1
+          new[j] -= 0.1
+          if new[i] > 1.0 or new[j] < 0.0:
+            continue
+          _, _, sharpe, _ = self.do_simulate(d_data, new)
+          # print 'Searching %d, %d, ' % (i, j)
+          # print "Sharpe = %f. " % sharpe
+          # print 'allocations = ', new
+          if sharpe > best_sharpe:
+            best_sharpe = sharpe
+            best_allocations = new
+            pair = (i, j)
+
+      return best_sharpe, best_allocations
+
+    numIter = 0
+    old_sharpe = 0
+    old_allocations = allocations
+    diff = 100
+    while numIter < maxIter:
+      numIter += 1
+      sharpe, allocations = search_direction(old_allocations)
+      print "Iter #%d, sharpe = %f. " % (numIter, sharpe)
+      print "Allocation = ", allocations
+      diff = sharpe - old_sharpe
+      if diff < EPSILON:
+        break
+
+      old_sharpe = sharpe
+      old_allocations = allocations
+
+    return old_allocations
+
+  def optimize_portfolio(self, startdate, enddate, ls_symbols,
+                         allocations = None):
+    d_data = self.get_data(startdate, enddate, ls_symbols)
+    return self.do_optimize(d_data, allocations)
+
+  def do_simulate(self, d_data, allocations):
     # Getting the numpy ndarray of close prices.
-    self.na_price = self.d_data['close'].values
+    na_price = d_data['close'].values
 
     # Normalizing the prices to start at 1 and see relative returns
-    na_normalized_price = self.na_price / self.na_price[0, :]
+    na_normalized_price = na_price / na_price[0, :]
 
     # cumulative daily portfolio value
     na_cumret = np.sum(na_normalized_price * allocations, axis = 1)
@@ -68,6 +130,15 @@ class Simulator:
 
     sharpe = avg_ret / vol
     return vol, avg_ret, sharpe, na_cumret[-1]
+
+  def simulate(self, startdate, enddate, ls_symbols, allocations):
+    '''
+    Simulate and access the performance of a portfolio
+    @return: volalitility, daily_ret, sharp, cum_ret
+    '''
+    d_data = self.get_data(startdate, enddate, ls_symbols)
+    return self.do_simulate(d_data, allocations)
+
 
 def report_stats(dt_start, dt_end, ls_symbols, allocations,
                  vol, daily_ret, cum_ret):
