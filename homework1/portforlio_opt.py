@@ -4,7 +4,9 @@ Homework1 of computational investing
 @author: Zigang Xiao
 '''
 
+import operator
 import numpy as np
+import scipy.optimize as so
 
 # QSTK Imports
 import QSTK.qstkutil.qsdateutil as du
@@ -16,6 +18,14 @@ import datetime as dt
 import matplotlib.pyplot as plt
 import pandas as pd
 
+# given an iterable of pairs return the key corresponding to the greatest value
+def argmax(pairs):
+  if not pairs: return None, 0.0
+  return argmax_pair(pairs)[0]
+
+def argmax_pair(pairs):
+  if not pairs: return None, 0.0
+  return max(pairs, key = operator.itemgetter(1))
 
 class Simulator:
   def __init__(self):
@@ -57,7 +67,7 @@ class Simulator:
       allocations = np.random.random(nstocks)
       allocations = allocations / np.mean(allocations)
 
-    def search_direction(allocations):
+    def hill_climbing(allocations):
       # simple strategy: explore each possible direction
       best_sharpe = 0.0
       best_allocations = allocations
@@ -86,15 +96,14 @@ class Simulator:
       return best_sharpe, best_allocations
 
     numIter = 0
-    old_sharpe = 0
+    old_sharpe = float("-inf")
     old_allocations = allocations
-    diff = 100
     while numIter < maxIter:
       numIter += 1
-      sharpe, allocations = search_direction(old_allocations)
-      print "Iter #%d, sharpe = %f. " % (numIter, sharpe)
-      print "Allocation = ", allocations
+      sharpe, allocations = hill_climbing(old_allocations)
       diff = sharpe - old_sharpe
+      print "Iter #%d, sharpe = %f. Diff = %f" % (numIter, sharpe, diff)
+      print "Allocation = ", allocations
       if diff < EPSILON:
         break
 
@@ -103,10 +112,89 @@ class Simulator:
 
     return old_allocations
 
+  def spherical2cartesian(self, polars):
+    n = len(polars) + 1
+    x = [0] * n
+
+    # [1, sin(phi_1), ..., sin(phi_n-1)]
+    sin = np.sin(polars)
+    sin = np.concatenate([[1], sin])
+
+    # [cos(phi_1), ..., cos(phi_n-1), 1]
+    cos = np.cos(polars)
+    cos = np.concatenate([cos, [1]])
+
+    x = np.cumprod(sin)
+    x *= cos
+
+    return x
+
+  def spherical2allocation(self, polars):
+    return np.square(self.spherical2cartesian(polars))
+
+  def spherical_optimize(self, d_data, x0):
+    '''
+    Use spherical coordinate:
+    x1, x2 ... xn <-> phi_1 phi_2, ... phi_n-1, where phi_n-1 ranges [0, 2pi]
+    and the others [0, pi]
+    @params: x0 is the initial guess
+    '''
+
+    # since its maximize, negate the sharpe
+    def f(x): return -self.sharpe(d_data, self.spherical2allocation(x))
+
+    n = len(x0)
+    bounds = [(0, np.pi/2)] * n
+    # bounds[-1] = (0, 2*np.pi)
+    x, nfeval, rc = so.fmin_tnc(f, x0, approx_grad = True, bounds = bounds)
+
+    return self.spherical2allocation(x)
+
+  def multiple_restart(self, d_data, n):
+    '''
+    Two pass strategy
+    1. use pi's divisions as starting point
+    2. use random points
+
+    @params: n is the length of the spherical coordinates
+    '''
+
+    # pass 1
+    ndiv = 10
+    divs = np.array([np.pi] * ndiv) / range(1, ndiv + 1)
+    divs = np.array([divs] * n).transpose()
+
+    # pass 2
+    nrnd = 10
+    rand = np.random.random(nrnd)
+    rand = np.array([np.pi * rand] * n).transpose()
+
+    init = np.concatenate([divs, rand])
+    xs = [self.spherical_optimize(d_data, x0) for x0 in init]
+    sharpes = [self.sharpe(d_data, x) for x in xs]
+    pairs = zip(xs, sharpes)
+    xopt = argmax(pairs)
+    return xopt
+
   def optimize_portfolio(self, startdate, enddate, ls_symbols,
                          allocations = None):
+    '''
+    if x0 (allocations) is given, just use it.
+    Otherwise use random restart technique
+    '''
     d_data = self.get_data(startdate, enddate, ls_symbols)
-    return self.do_optimize(d_data, allocations)
+    # return self.do_optimize(d_data, allocations)
+
+    # generate initial spherical coordinate
+    if not allocations:
+      n = len(ls_symbols)
+      return self.multiple_restart(d_data, n-1)
+    else:
+      x0 = allocations
+      return self.spherical_optimize(d_data, x0)
+
+  def sharpe(self, d_data, allocations):
+    return self.do_simulate(d_data, allocations)[2]
 
   def do_simulate(self, d_data, allocations):
     # Getting the numpy ndarray of close prices.
@@ -128,7 +216,7 @@ class Simulator:
     # standard dev of daily returns
     vol = np.std(na_rets)
 
-    sharpe = avg_ret / vol
+    sharpe = np.sqrt(252) * avg_ret / vol
     return vol, avg_ret, sharpe, na_cumret[-1]
 
   def simulate(self, startdate, enddate, ls_symbols, allocations):
@@ -139,13 +227,13 @@ class Simulator:
     d_data = self.get_data(startdate, enddate, ls_symbols)
     return self.do_simulate(d_data, allocations)
 
-
-def report_stats(dt_start, dt_end, ls_symbols, allocations,
+def report_stats(dt_start, dt_end, ls_symbols, allocations, sharpe,
                  vol, daily_ret, cum_ret):
   print 'Start Date:', dt_start
   print 'End Date:', dt_end
   print 'Symbols:', ls_symbols
   print 'Optimal Allocations:', allocations
+  print 'Sharpe Ratio:', sharpe
   print 'Volatility (stdev of daily returns):', vol
   print 'Average Daily Return:', daily_ret
   print 'Cumulative Return:', cum_ret
@@ -164,7 +252,7 @@ def test1():
   vol, daily_ret, sharpe, cum_ret = opt.simulate(
                                   dt_start, dt_end, ls_symbols, allocations)
 
-  report_stats(dt_start, dt_end, ls_symbols, allocations, 
+  report_stats(dt_start, dt_end, ls_symbols, allocations, sharpe,
                vol, daily_ret, cum_ret)
 
 def test2():
@@ -181,7 +269,7 @@ def test2():
   vol, daily_ret, sharpe, cum_ret = opt.simulate(
                                   dt_start, dt_end, ls_symbols, allocations)
 
-  report_stats(dt_start, dt_end, ls_symbols, allocations, 
+  report_stats(dt_start, dt_end, ls_symbols, allocations, sharpe,
                vol, daily_ret, cum_ret)
 
 def main():
