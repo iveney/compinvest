@@ -27,7 +27,7 @@ def argmax_pair(pairs):
   if not pairs: return None, 0.0
   return max(pairs, key = operator.itemgetter(1))
 
-class Simulator:
+class PortfolioOptimizer:
   def __init__(self):
     # Creating an object of the dataaccess class with Yahoo as the source.
     self.c_dataobj = da.DataAccess('Yahoo', cachestalltime=0)
@@ -146,7 +146,8 @@ class Simulator:
     n = len(x0)
     bounds = [(0, np.pi/2)] * n
     # bounds[-1] = (0, 2*np.pi)
-    x, nfeval, rc = so.fmin_tnc(f, x0, approx_grad = True, bounds = bounds)
+    x, nfeval, rc = so.fmin_tnc(f, x0, approx_grad = True, bounds = bounds,
+                                disp = 0)
 
     return self.spherical2allocation(x)
 
@@ -248,7 +249,7 @@ def test1():
 
   # allocations to the equities
   allocations = [0.4, 0.4, 0.0, 0.2]
-  opt = Simulator()
+  opt = PortfolioOptimizer()
   vol, daily_ret, sharpe, cum_ret = opt.simulate(
                                   dt_start, dt_end, ls_symbols, allocations)
 
@@ -265,12 +266,40 @@ def test2():
 
   # allocations to the equities
   allocations = [0.0, 0.0, 0.0, 1.0]
-  opt = Simulator()
+  opt = PortfolioOptimizer()
   vol, daily_ret, sharpe, cum_ret = opt.simulate(
                                   dt_start, dt_end, ls_symbols, allocations)
 
   report_stats(dt_start, dt_end, ls_symbols, allocations, sharpe,
                vol, daily_ret, cum_ret)
+
+def Question1():
+  ls_symbols = ['AAPL', 'GOOG', 'IBM', 'MSFT']
+
+  # Start and End date of the charts
+  dt_start = dt.datetime(2010, 1, 1)
+  dt_end = dt.datetime(2010, 12, 31)
+
+  # allocations to the equities
+  allocations = [0.0, 0.0, 0.0, 1.0]
+  opt = PortfolioOptimizer()
+  allocations = opt.optimize_portfolio(dt_start, dt_end, ls_symbols)
+  sharpe = opt.simulate(dt_start, dt_end, ls_symbols, allocations)[2]
+  print allocations, sharpe
+
+def Question2():
+  ls_symbols = ['C', 'GS', 'IBM', 'HNZ']
+
+  # Start and End date of the charts
+  dt_start = dt.datetime(2010, 1, 1)
+  dt_end = dt.datetime(2010, 12, 31)
+
+  # allocations to the equities
+  allocations = [0.0, 0.0, 0.0, 1.0]
+  opt = PortfolioOptimizer()
+  allocations = opt.optimize_portfolio(dt_start, dt_end, ls_symbols)
+  sharpe = opt.simulate(dt_start, dt_end, ls_symbols, allocations)[2]
+  print allocations, sharpe
 
 def main():
   ''' Main Function'''
